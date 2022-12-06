@@ -17,21 +17,11 @@ type Handler =
   fn(Request(BitString), Response(BitBuilder), Next) -> RequestResponse
 
 type Router(t) {
-  Router(base: String, routes: Map(Method, List(Route(t))))
+  Router(base: String, routes: List(Route(t)))
 }
 
 type Route(t) {
-  Route(url: String, handler: fn(Request(t)) -> Response(BitBuilder))
-}
-
-fn chain_handlers(
-  req: Request(BitString),
-  resp: Response(BitBuilder),
-  a: Handler,
-  b: Handler,
-) {
-  let first = chain(a, end)
-  let second = chain(b, first)
+  Route(url: String, handler: Handler)
 }
 
 fn chain(
@@ -45,68 +35,51 @@ fn end(request: Request(BitString), response: Response(BitBuilder)) {
   #(request, response)
 }
 
-fn start_router(base: String, continue) {
-  continue(Router(base, map.new()))
-}
-
-fn route(route: Route(t), router: Router(t), continue) {
-  let routes = case map.get(router.routes, Get) {
-    Ok(routes) -> routes
-    _ -> []
-  }
-  continue(
-    Router(..router, routes: map.insert(router.routes, Get, [route, ..routes])),
-  )
-}
-
-fn service(router: Router(t)) {
-  router
-  |> io.debug()
-  fn(req: Request(t)) -> Response(BitBuilder) {
-    let routes =
-      router.routes
-      |> map.get(req.method)
-    case routes {
-      Ok(route_list) -> match_route(req, route_list)
-      _ ->
-        response.new(404)
-        |> response.set_body(bit_builder.from_string(""))
+fn get(path: String, handler: Handler, router: Router(t), continue) {
+  let get_handler: Handler = fn(req: Request(BitString), res, next) {
+    case req.method, path == req.path {
+      Get, True -> handler(req, res, next)
+      _, _ -> next(req, res)
     }
   }
+  let get_route = Route(path, get_handler)
+  continue(Router(..router, routes: [get_route, ..router.routes]))
 }
 
-fn match_route(
-  req: Request(t),
-  route_list: List(Route(t)),
-) -> Response(BitBuilder) {
-  let route =
-    route_list
-    |> list.find(fn(route) { route.url == req.path })
-  case route {
-    Ok(route) -> route.handler(req)
-    _ ->
+fn start_router(base: String, continue) {
+  continue(Router(base, []))
+}
+
+fn build_service(router: Router(t)) {
+  let route_handler =
+    router.routes
+    |> list.fold(end, fn(next, route) { chain(route.handler, next) })
+  fn(request: Request(BitString)) {
+    let response =
       response.new(404)
-      |> response.set_body(bit_builder.from_string(""))
+      |> response.set_body(bit_builder.from_string("Not found"))
+    assert #(_, res) = route_handler(request, response)
+    res
   }
 }
 
 pub fn main() {
-  use router <- start_router("testj")
-  use router <- route(Route("/hello/world", hello_handler), router)
-  use router <- route(Route("/apa/bepa", hello_handler), router)
-  elli.become(service(router), on_port: 3000)
+  use router <- start_router("apa")
+  use router <- get("/hello/world", hello_handler, router)
+  use router <- get("/apa/bepa", hello_handler, router)
+  elli.become(build_service(router), on_port: 3000)
 }
 
-fn hello_handler(request: Request(BitString)) -> Response(BitBuilder) {
+fn hello_handler(
+  request: Request(BitString),
+  response: Response(BitBuilder),
+  next,
+) -> RequestResponse {
   let body: BitString = request.body
   let response_body = bit_builder.from_bit_string(body)
-  response.new(200)
-  |> response.set_body(response_body)
-}
-
-fn bepa_handler(request: Request(Int)) -> Response(BitBuilder) {
-  let body: Int = request.body
-  let response_body = bit_builder.from_string("Bepa")
-  response.new(200)
-  |> response.set_body(response_body)
+  let response_new =
+    response.new(200)
+    |> response.set_body(response_body)
+  next(request, response_new)
+  // #(request, response_new)
 }

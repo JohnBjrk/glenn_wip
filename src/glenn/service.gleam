@@ -8,14 +8,19 @@ import gleam/list
 import gleam/uri
 import gleam/option.{None, Option, Some}
 
-pub type RequestResponse =
-  Response(BitBuilder)
+pub type Trail {
+  Trail(
+    request: Request(BitString),
+    response: Response(BitBuilder),
+    parameters: List(String),
+  )
+}
 
 pub type Next =
-  fn(Request(BitString), Response(BitBuilder)) -> RequestResponse
+  fn(Trail) -> Response(BitBuilder)
 
 pub type Handler =
-  fn(Request(BitString), Response(BitBuilder), Next) -> RequestResponse
+  fn(Trail, Next) -> Response(BitBuilder)
 
 pub type Router {
   Router(base: String, routes: List(Route))
@@ -35,15 +40,12 @@ type Segment {
   FixedSegment(name: String)
 }
 
-fn chain(
-  handler: Handler,
-  next: fn(Request(BitString), Response(BitBuilder)) -> RequestResponse,
-) -> Next {
-  fn(req, res) { handler(req, res, next) }
+fn chain(handler: Handler, next: fn(Trail) -> Response(BitBuilder)) -> Next {
+  fn(trail: Trail) { handler(trail, next) }
 }
 
-fn end(_request: Request(BitString), response: Response(BitBuilder)) {
-  response
+fn end(trail: Trail) {
+  trail.response
 }
 
 pub fn get(router: Router, path: String, handler: Handler) {
@@ -60,17 +62,17 @@ fn mk_handler(path: String, method: Method, handler) {
   io.println("Adding: " <> path)
   let path_segments = uri.path_segments(path)
   io.debug(path_segments)
-  fn(req: Request(BitString), res, next) {
+  fn(trail: Trail, next) {
     io.println("Trying: " <> path)
     case
-      req.method == method,
-      match_segments(path_segments, uri.path_segments(req.path))
+      trail.request.method == method,
+      match_segments(path_segments, uri.path_segments(trail.request.path))
     {
       True, Some(parsed_segments) -> {
         io.debug(parsed_segments)
-        handler(req, res, next)
+        handler(trail, next)
       }
-      _, _ -> next(req, res)
+      _, _ -> next(trail)
     }
   }
 }
@@ -125,10 +127,10 @@ fn match_segment(router_segment, request_segment) -> Option(Segment) {
 }
 
 fn mk_middleware(path: String, handler: Handler) {
-  fn(req: Request(BitString), res, next) {
-    case string.starts_with(req.path, path) {
-      True -> handler(req, res, next)
-      False -> next(req, res)
+  fn(trail: Trail, next) {
+    case string.starts_with(trail.request.path, path) {
+      True -> handler(trail, next)
+      False -> next(trail)
     }
   }
 }
@@ -200,7 +202,7 @@ fn with_build_service(
     let response =
       response.new(404)
       |> response.set_body(bit_builder.from_string("Not found"))
-    route_handler(request, response)
+    route_handler(Trail(request, response, []))
   })
 }
 
@@ -209,30 +211,25 @@ pub fn with_server(server, service, continue) {
   continue()
 }
 
-pub fn logger(request: Request(BitString), response: Response(BitBuilder), next) {
+pub fn logger(trail: Trail, next) {
   io.println(
-    string.uppercase(method_to_string(request.method)) <> ": " <> scheme_to_string(
-      request.scheme,
-    ) <> ":" <> request.host <> request.path,
+    string.uppercase(method_to_string(trail.request.method)) <> ": " <> scheme_to_string(
+      trail.request.scheme,
+    ) <> ":" <> trail.request.host <> trail.request.path,
   )
-  next(request, response)
+  next(trail)
 }
 
-pub fn not_found(
-  handler: fn(Request(BitString), Response(BitBuilder)) -> Response(BitBuilder),
-) {
+pub fn not_found(handler: fn(Trail) -> Response(BitBuilder)) {
   error_handler(404, handler)
 }
 
-pub fn error_handler(
-  status: Int,
-  handler: fn(Request(BitString), Response(BitBuilder)) -> Response(BitBuilder),
-) {
-  fn(request: Request(BitString), response: Response(BitBuilder), next) {
-    let new_response = case response.status == status {
-      True -> handler(request, response)
-      _ -> response
+pub fn error_handler(status: Int, handler: fn(Trail) -> Response(BitBuilder)) {
+  fn(trail: Trail, next) {
+    let new_response = case trail.response.status == status {
+      True -> handler(trail)
+      _ -> trail.response
     }
-    next(request, new_response)
+    next(Trail(..trail, response: new_response))
   }
 }

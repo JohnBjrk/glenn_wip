@@ -1,10 +1,13 @@
 import gleam/io
 import gleam/string.{drop_left, drop_right, ends_with, starts_with}
-import gleam/http.{Get, Method, method_to_string, scheme_to_string}
+import gleam/http.{
+  Connect, Delete, Get, Head, Method, Options, Patch, Post, Put, Trace,
+  method_to_string, scheme_to_string,
+}
 import gleam/http/response.{Response}
 import gleam/http/request.{Request}
 import gleam/bit_builder.{BitBuilder}
-import gleam/list
+import gleam/list.{filter_map}
 import gleam/uri
 import gleam/option.{None, Option, Some}
 
@@ -49,12 +52,63 @@ fn end(trail: Trail) {
 }
 
 pub fn get(router: Router, path: String, handler: Handler) {
-  use router <- with_get(path, handler, router)
+  use router <- with_method(Get, path, handler, router)
   router
 }
 
-fn with_get(path: String, handler: Handler, router: Router, continue: Continue) {
-  let get_route = Route(path, Get, handler)
+pub fn post(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Post, path, handler, router)
+  router
+}
+
+pub fn put(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Put, path, handler, router)
+  router
+}
+
+pub fn patch(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Patch, path, handler, router)
+  router
+}
+
+pub fn options(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Options, path, handler, router)
+  router
+}
+
+pub fn connect(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Connect, path, handler, router)
+  router
+}
+
+pub fn trace(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Trace, path, handler, router)
+  router
+}
+
+pub fn delete(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Delete, path, handler, router)
+  router
+}
+
+pub fn head(router: Router, path: String, handler: Handler) {
+  use router <- with_method(Head, path, handler, router)
+  router
+}
+
+pub fn handler(method: Method, router: Router, path: String, handler: Handler) {
+  use router <- with_method(method, path, handler, router)
+  router
+}
+
+fn with_method(
+  method: Method,
+  path: String,
+  handler: Handler,
+  router: Router,
+  continue: Continue,
+) {
+  let get_route = Route(path, method, handler)
   continue(Router(..router, routes: [get_route, ..router.routes]))
 }
 
@@ -70,7 +124,15 @@ fn mk_handler(path: String, method: Method, handler) {
     {
       True, Some(parsed_segments) -> {
         io.debug(parsed_segments)
-        handler(trail, next)
+        let parameters =
+          parsed_segments
+          |> filter_map(fn(segment) {
+            case segment {
+              PathParameter(name, value) -> Ok(value)
+              _ -> Error(Nil)
+            }
+          })
+        handler(Trail(..trail, parameters: parameters), next)
       }
       _, _ -> next(trail)
     }

@@ -1,6 +1,5 @@
 import gleam/io
 import gleam/http/response.{Response}
-import gleam/http/request.{Request}
 import gleam/bit_builder.{BitBuilder}
 import gleam/bit_string
 import gleam/http/elli
@@ -12,23 +11,31 @@ pub fn main() {
   let sub =
     start_router("")
     |> using(auth)
-    |> get("/sub", hello_handler)
+    |> get("/sub", echo_path_handler)
 
   start_router("/api")
   |> using(logger)
   |> using(set_header)
   |> route("/ttt", sub)
-  |> get("/hello/world", hello_handler)
-  |> get("/{user}/details", hello_handler)
+  |> get("/hello/world", echo_path_handler)
+  |> get("/{user}/details", user_handler)
   // |> using(auth)
-  |> get("/apa/bepa", hello_handler)
+  |> get("/apa/bepa", echo_path_handler)
   |> using(not_found(fancy_404))
   |> build_service()
   |> elli.become(on_port: 3000)
 }
 
-fn hello_handler(trail: Trail, _next) -> Response(BitBuilder) {
+fn echo_path_handler(trail: Trail, _next) -> Response(BitBuilder) {
   let body = bit_string.from_string(trail.request.path)
+  let response_body = bit_builder.from_bit_string(body)
+  Response(..trail.response, status: 200)
+  |> response.set_body(response_body)
+}
+
+fn user_handler(trail: Trail, _next) -> Response(BitBuilder) {
+  assert [user] = trail.parameters
+  let body = bit_string.from_string("Hello: " <> user)
   let response_body = bit_builder.from_bit_string(body)
   Response(..trail.response, status: 200)
   |> response.set_body(response_body)

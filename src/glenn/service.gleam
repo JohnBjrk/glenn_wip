@@ -1,15 +1,15 @@
 import gleam/io
-import gleam/string
+import gleam/string.{drop_left, drop_right, ends_with, starts_with}
 import gleam/http.{Get, Method, method_to_string, scheme_to_string}
 import gleam/http/response.{Response}
 import gleam/http/request.{Request}
 import gleam/bit_builder.{BitBuilder}
 import gleam/list
+import gleam/uri
+import gleam/option.{None, Option, Some}
 
 pub type RequestResponse =
   Response(BitBuilder)
-
-// #(Request(BitString), Response(BitBuilder))
 
 pub type Next =
   fn(Request(BitString), Response(BitBuilder)) -> RequestResponse
@@ -30,6 +30,11 @@ pub type Route {
 type Continue =
   fn(Router) -> Router
 
+type Segment {
+  PathParameter(name: String, value: String)
+  FixedSegment(name: String)
+}
+
 fn chain(
   handler: Handler,
   next: fn(Request(BitString), Response(BitBuilder)) -> RequestResponse,
@@ -38,37 +43,84 @@ fn chain(
 }
 
 fn end(_request: Request(BitString), response: Response(BitBuilder)) {
-  io.println("Reached end")
   response
-  // #(request, response)
-}
-
-fn continue(router: Router) -> Router {
-  router
 }
 
 pub fn get(router: Router, path: String, handler: Handler) {
-  with_get(path, handler, router, continue)
+  use router <- with_get(path, handler, router)
+  router
 }
 
-pub fn with_get(
-  path: String,
-  handler: Handler,
-  router: Router,
-  continue: Continue,
-) {
+fn with_get(path: String, handler: Handler, router: Router, continue: Continue) {
   let get_route = Route(path, Get, handler)
   continue(Router(..router, routes: [get_route, ..router.routes]))
 }
 
 fn mk_handler(path: String, method: Method, handler) {
   io.println("Adding: " <> path)
+  let path_segments = uri.path_segments(path)
+  io.debug(path_segments)
   fn(req: Request(BitString), res, next) {
     io.println("Trying: " <> path)
-    case req.method == method, path == req.path {
-      True, True -> handler(req, res, next)
+    case
+      req.method == method,
+      match_segments(path_segments, uri.path_segments(req.path))
+    {
+      True, Some(parsed_segments) -> {
+        io.debug(parsed_segments)
+        handler(req, res, next)
+      }
       _, _ -> next(req, res)
     }
+  }
+}
+
+fn match_segments(
+  route_segments: List(String),
+  request_segments: List(String),
+) -> Option(List(Segment)) {
+  io.println("Matching")
+  io.debug(route_segments)
+  io.debug(request_segments)
+  case route_segments, request_segments {
+    [first_router_segment, ..router_segments], [
+      first_request_segment,
+      ..request_segments
+    ] ->
+      case
+        match_segment(first_router_segment, first_request_segment),
+        match_segments(router_segments, request_segments)
+      {
+        Some(segment), Some(segments) -> Some([segment, ..segments])
+        _, _ -> None
+      }
+    [last_router_segment], [last_request_segment] ->
+      case match_segment(last_router_segment, last_request_segment) {
+        Some(segment) -> Some([segment])
+        None -> None
+      }
+    [], [] -> Some([])
+    _, _ -> None
+  }
+}
+
+fn match_segment(router_segment, request_segment) -> Option(Segment) {
+  case starts_with(router_segment, "{") && ends_with(router_segment, "}") {
+    True -> {
+      let name =
+        router_segment
+        |> drop_left(1)
+        |> drop_right(1)
+      Some(PathParameter(name, request_segment))
+      |> io.debug()
+    }
+    False ->
+      case router_segment == request_segment {
+        True ->
+          Some(FixedSegment(router_segment))
+          |> io.debug()
+        False -> None
+      }
   }
 }
 
@@ -82,10 +134,11 @@ fn mk_middleware(path: String, handler: Handler) {
 }
 
 pub fn route(router: Router, path: String, sub_router: Router) {
-  with_route(path, sub_router, router, continue)
+  use router <- with_route(path, sub_router, router)
+  router
 }
 
-pub fn with_route(
+fn with_route(
   path: String,
   sub_router: Router,
   router: Router,
@@ -96,19 +149,21 @@ pub fn with_route(
 }
 
 pub fn using(router: Router, handler: Handler) {
-  with_using(handler, router, continue)
+  use router <- with_using(handler, router)
+  router
 }
 
-pub fn with_using(handler: Handler, router: Router, continue: Continue) {
+fn with_using(handler: Handler, router: Router, continue: Continue) {
   let middleware = Middleware(handler)
   continue(Router(..router, routes: [middleware, ..router.routes]))
 }
 
 pub fn start_router(base: String) -> Router {
-  with_start_router(base, continue)
+  use router <- with_start_router(base)
+  router
 }
 
-pub fn with_start_router(base: String, continue: Continue) {
+fn with_start_router(base: String, continue: Continue) {
   continue(Router(base, []))
 }
 
@@ -132,10 +187,11 @@ fn build_route_handler(next: Next, context: String, routes: List(Route)) {
 }
 
 pub fn build_service(router: Router) {
-  with_build_service(router, fn(service) { service })
+  use service <- with_build_service(router)
+  service
 }
 
-pub fn with_build_service(
+fn with_build_service(
   router: Router,
   continue,
 ) -> fn(Request(BitString)) -> Response(BitBuilder) {
@@ -160,4 +216,23 @@ pub fn logger(request: Request(BitString), response: Response(BitBuilder), next)
     ) <> ":" <> request.host <> request.path,
   )
   next(request, response)
+}
+
+pub fn not_found(
+  handler: fn(Request(BitString), Response(BitBuilder)) -> Response(BitBuilder),
+) {
+  error_handler(404, handler)
+}
+
+pub fn error_handler(
+  status: Int,
+  handler: fn(Request(BitString), Response(BitBuilder)) -> Response(BitBuilder),
+) {
+  fn(request: Request(BitString), response: Response(BitBuilder), next) {
+    let new_response = case response.status == status {
+      True -> handler(request, response)
+      _ -> response
+    }
+    next(request, new_response)
+  }
 }

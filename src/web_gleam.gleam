@@ -5,9 +5,8 @@ import gleam/bit_builder.{BitBuilder}
 import gleam/bit_string
 import gleam/http/elli
 import glenn/service.{
-  Handler, Next, RequestResponse, build_service, get, logger, route,
-  start_router, using, with_build_service, with_get, with_route, with_server,
-  with_start_router, with_using,
+  RequestResponse, build_service, get, logger, not_found, route, start_router,
+  using,
 }
 
 pub fn main() {
@@ -21,8 +20,10 @@ pub fn main() {
   |> using(set_header)
   |> route("/ttt", sub)
   |> get("/hello/world", hello_handler)
-  |> using(auth)
+  |> get("/{user}/details", hello_handler)
+  // |> using(auth)
   |> get("/apa/bepa", hello_handler)
+  |> using(not_found(fancy_404))
   |> build_service()
   |> elli.become(on_port: 3000)
 }
@@ -50,4 +51,14 @@ fn set_header(request: Request(BitString), response: Response(BitBuilder), next)
     response
     |> response.prepend_header("made-with", "Glitch")
   next(request, new_response)
+}
+
+fn fancy_404(
+  request: Request(BitString),
+  response: Response(BitBuilder),
+) -> Response(BitBuilder) {
+  let response_body =
+    bit_builder.from_string("Cound not find resource: " <> request.path)
+  response
+  |> response.set_body(response_body)
 }

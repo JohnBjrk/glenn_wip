@@ -4,24 +4,29 @@ import gleam/bit_builder.{BitBuilder}
 import gleam/bit_string
 import gleam/http/elli
 import glenn/service.{
-  Trail, build_service, get, logger, not_found, route, start_router, using,
+  Trail, build_service, default, get, logger, not_found, route, router, using,
 }
 
 pub fn main() {
   let sub =
-    start_router("")
+    router(default)
     |> using(auth)
     |> get("/sub", echo_path_handler)
 
-  start_router("/api")
-  |> using(logger)
-  |> using(set_header)
-  |> route("/ttt", sub)
-  |> get("/hello/world", echo_path_handler)
-  |> get("/{user}/details", user_handler)
-  // |> using(auth)
-  |> get("/apa/bepa", echo_path_handler)
-  |> using(not_found(fancy_404))
+  let api =
+    router(default)
+    |> using(logger)
+    |> using(set_header)
+    |> route("/ttt", sub)
+    |> get("/hello/world", echo_path_handler)
+    |> get("/wild/*", echo_path_handler)
+    |> get("/{user}/details", user_handler)
+    // |> using(auth)
+    |> get("/apa/bepa", echo_path_handler)
+    |> using(not_found(fancy_404))
+
+  router(default)
+  |> route("/api", api)
   |> build_service()
   |> elli.become(on_port: 3000)
 }

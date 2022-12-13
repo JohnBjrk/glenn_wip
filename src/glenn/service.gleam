@@ -11,6 +11,12 @@ import gleam/list.{filter_map}
 import gleam/uri
 import gleam/option.{None, Option, Some}
 
+pub type Configuration {
+  Configuration(match_trace: Bool)
+}
+
+pub const default = Configuration(False)
+
 pub type Trail {
   Trail(
     request: Request(BitString),
@@ -26,7 +32,7 @@ pub type Handler =
   fn(Trail, Next) -> Response(BitBuilder)
 
 pub type Router {
-  Router(base: String, routes: List(Route))
+  Router(base: String, routes: List(Route), configuration: Configuration)
 }
 
 pub type Route {
@@ -41,6 +47,7 @@ type Continue =
 type Segment {
   PathParameter(name: String, value: String)
   FixedSegment(name: String)
+  Wildcard(rest: List(String))
 }
 
 fn chain(handler: Handler, next: fn(Trail) -> Response(BitBuilder)) -> Next {
@@ -147,6 +154,8 @@ fn match_segments(
   io.debug(route_segments)
   io.debug(request_segments)
   case route_segments, request_segments {
+    ["*"], remaining_request_segments ->
+      Some([Wildcard(remaining_request_segments)])
     [first_router_segment, ..router_segments], [
       first_request_segment,
       ..request_segments
@@ -166,6 +175,7 @@ fn match_segments(
     [], [] -> Some([])
     _, _ -> None
   }
+  |> io.debug()
 }
 
 fn match_segment(router_segment, request_segment) -> Option(Segment) {
@@ -222,13 +232,25 @@ fn with_using(handler: Handler, router: Router, continue: Continue) {
   continue(Router(..router, routes: [middleware, ..router.routes]))
 }
 
-pub fn start_router(base: String) -> Router {
-  use router <- with_start_router(base)
+pub fn router(configuration: Configuration) -> Router {
+  start_router_base(configuration)
+}
+
+pub fn start_router_config(configuration: Configuration) -> Router {
+  router(configuration)
+}
+
+pub fn start_router_base(configuration: Configuration) -> Router {
+  use router <- with_start_router("", configuration)
   router
 }
 
-fn with_start_router(base: String, continue: Continue) {
-  continue(Router(base, []))
+fn with_start_router(
+  base: String,
+  configuration: Configuration,
+  continue: Continue,
+) {
+  continue(Router(base, [], configuration))
 }
 
 fn build_route_handler(next: Next, context: String, routes: List(Route)) {
@@ -238,10 +260,14 @@ fn build_route_handler(next: Next, context: String, routes: List(Route)) {
     fn(next, route) {
       case route {
         Route(path, method, handler) ->
-          mk_handler(context <> path, method, handler)
+          mk_handler("/" <> context <> "/" <> path, method, handler)
           |> chain(next)
         SubRoute(path, router) ->
-          build_route_handler(next, context <> path, router.routes)
+          build_route_handler(
+            next,
+            "/" <> context <> "/" <> path,
+            router.routes,
+          )
         Middleware(handler) ->
           mk_middleware(context, handler)
           |> chain(next)

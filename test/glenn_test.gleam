@@ -1,19 +1,14 @@
 import gleeunit
 import gleeunit/should
-import gleam/bit_builder.{BitBuilder, to_bit_string}
-import gleam/bit_string.{from_string, to_string}
-import gleam/http/response.{Response}
-import gleam/http/request.{Request, from_uri, set_body}
+import gleam/http/request
 import gleam/http.{Patch}
-import gleam/uri
-import glenn/service.{
+import glenn.{
   Trail, build_service, default, get, logger, not_found, not_found_trace, patch,
   route, router, using,
 }
-import glenn/testing.{
+import glenn_testing.{
   fixed_body_response, get_body, mk_request, never, parameters_echo, path_echo,
 }
-import gleam/io
 
 pub fn main() {
   gleeunit.main()

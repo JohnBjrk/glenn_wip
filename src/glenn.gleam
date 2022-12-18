@@ -20,7 +20,7 @@ pub fn main() {
     |> route("/ttt", sub)
     |> get("/hello/world", echo_path_handler)
     |> get("/wild/*", echo_path_handler)
-    |> get("/{user}/details", user_handler)
+    |> get("/{prefix}/{user}/details", user_handler)
     // |> using(auth)
     |> get("/apa/bepa", echo_path_handler)
     |> using(not_found(fancy_404))
@@ -39,8 +39,8 @@ fn echo_path_handler(trail: Trail, _next) -> Response(BitBuilder) {
 }
 
 fn user_handler(trail: Trail, _next) -> Response(BitBuilder) {
-  assert [user] = trail.parameters
-  let body = bit_string.from_string("Hello: " <> user)
+  assert [prefix, user] = trail.parameters
+  let body = bit_string.from_string("Hej: " <> prefix <> " " <> user)
   let response_body = bit_builder.from_bit_string(body)
   Response(..trail.response, status: 200)
   |> response.set_body(response_body)

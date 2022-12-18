@@ -1,3 +1,9 @@
+//// Glenn is a module for building http routes. The routes are constructed with a fluent (builder) api which maps
+//// [handler](#Handler) functions to specific paths/methods. Routes can be constructed in a modular fashion which
+//// makes it easy to construct different subroutes separately.
+//// The final router can then be converted into a standard [Gleam HTTP](https://github.com/gleam-lang/http) service
+//// which can be used together with a server adapter of choice.
+
 import gleam/io
 import gleam/string.{drop_left, drop_right, ends_with, starts_with}
 import gleam/http.{
@@ -11,12 +17,18 @@ import gleam/list.{filter_map, fold, map}
 import gleam/uri
 import gleam/option.{None, Option, Some}
 
+/// Configuration type
 pub type Configuration {
   Configuration(match_trace: Bool)
 }
 
 pub const default = Configuration(False)
 
+/// A type holding the state of a request as it is being handled by the router.
+/// This state holds the incoming request and the current response (which might 
+/// have been manipulated by any handler/middleware). Futhermore it also holds any
+/// path-parameters that was found when matching the current route as well as a
+/// list of failed routes that can be used for more granular reporting.
 pub type Trail {
   Trail(
     request: Request(BitString),
@@ -26,17 +38,25 @@ pub type Trail {
   )
 }
 
+/// The next function which should be called by a handler in order to continue processing the current [Trail](#Trail)
 pub type Next =
   fn(Trail) -> Response(BitBuilder)
 
+/// The function signature of a handler. Handlers are attached to a router either as handlers for a specific path/method or
+/// as a middleware (see [using](#using)).
+/// The handler can process both the request and the response and then either return a response or call the [next](#Next) function
+/// with the updated [trail](#Trail).
+/// Usually a handler for a path/method will want to terminate the route by returning an updated whereas a middleware will call
+/// the [next](#Next) function in order to continue processing the current [trail](#Trail). This is however not a firm rule.
 pub type Handler =
   fn(Trail, Next) -> Response(BitBuilder)
 
-pub type Router {
+/// The Router type holds all routes, subroutes and middlewares when constructing a service.
+pub opaque type Router {
   Router(base: String, routes: List(Route), configuration: Configuration)
 }
 
-pub type Route {
+type Route {
   Route(url: String, method: Method, handler: Handler)
   SubRoute(url: String, router: Router)
   Middleware(handler: Handler)
@@ -180,7 +200,6 @@ fn match_segments(
     [], [] -> Ok([])
     _, _ -> Error([])
   }
-  //   |> io.debug()
 }
 
 fn match_segment(router_segment, request_segment) -> Result(Segment, Segment) {
@@ -192,11 +211,9 @@ fn match_segment(router_segment, request_segment) -> Result(Segment, Segment) {
         |> drop_right(1)
       Ok(PathParameter(name, request_segment))
     }
-    //   |> io.debug()
     False ->
       case router_segment == request_segment {
         True -> Ok(FixedSegment(router_segment))
-        //   |> io.debug()
         False -> Error(Mismatch(router_segment, request_segment))
       }
   }

@@ -7,7 +7,7 @@ import gleam/http.{
 import gleam/http/response.{Response}
 import gleam/http/request.{Request}
 import gleam/bit_builder.{BitBuilder}
-import gleam/list.{filter_map}
+import gleam/list.{filter_map, fold, map}
 import gleam/uri
 import gleam/option.{None, Option, Some}
 
@@ -22,6 +22,7 @@ pub type Trail {
     request: Request(BitString),
     response: Response(BitBuilder),
     parameters: List(String),
+    failed_routes: List(List(Segment)),
   )
 }
 
@@ -44,10 +45,11 @@ pub type Route {
 type Continue =
   fn(Router) -> Router
 
-type Segment {
+pub type Segment {
   PathParameter(name: String, value: String)
   FixedSegment(name: String)
   Wildcard(rest: List(String))
+  Mismatch(expected: String, got: String)
 }
 
 fn chain(handler: Handler, next: fn(Trail) -> Response(BitBuilder)) -> Next {
@@ -122,26 +124,30 @@ fn with_method(
 fn mk_handler(path: String, method: Method, handler) {
   io.println("Adding: " <> path)
   let path_segments = uri.path_segments(path)
-  io.debug(path_segments)
   fn(trail: Trail, next) {
     io.println("Trying: " <> path)
     case
       trail.request.method == method,
       match_segments(path_segments, uri.path_segments(trail.request.path))
     {
-      True, Some(parsed_segments) -> {
+      True, Ok(parsed_segments) -> {
         io.debug(parsed_segments)
         let parameters =
           parsed_segments
           |> filter_map(fn(segment) {
             case segment {
-              PathParameter(name, value) -> Ok(value)
+              PathParameter(_name, value) -> Ok(value)
               _ -> Error(Nil)
             }
           })
         handler(Trail(..trail, parameters: parameters), next)
       }
-      _, _ -> next(trail)
+      _, Error(segments) -> {
+        segments
+        let new_trail =
+          Trail(..trail, failed_routes: [segments, ..trail.failed_routes])
+        next(new_trail)
+      }
     }
   }
 }
@@ -149,13 +155,10 @@ fn mk_handler(path: String, method: Method, handler) {
 fn match_segments(
   route_segments: List(String),
   request_segments: List(String),
-) -> Option(List(Segment)) {
-  io.println("Matching")
-  io.debug(route_segments)
-  io.debug(request_segments)
+) -> Result(List(Segment), List(Segment)) {
   case route_segments, request_segments {
     ["*"], remaining_request_segments ->
-      Some([Wildcard(remaining_request_segments)])
+      Ok([Wildcard(remaining_request_segments)])
     [first_router_segment, ..router_segments], [
       first_request_segment,
       ..request_segments
@@ -164,36 +167,37 @@ fn match_segments(
         match_segment(first_router_segment, first_request_segment),
         match_segments(router_segments, request_segments)
       {
-        Some(segment), Some(segments) -> Some([segment, ..segments])
-        _, _ -> None
+        Ok(segment), Ok(segments) -> Ok([segment, ..segments])
+        Ok(segment), Error(segments) -> Error([segment, ..segments])
+        Error(segment), Ok(segments) -> Error([segment, ..segments])
+        Error(segment), Error(segments) -> Error([segment, ..segments])
       }
     [last_router_segment], [last_request_segment] ->
       case match_segment(last_router_segment, last_request_segment) {
-        Some(segment) -> Some([segment])
-        None -> None
+        Ok(segment) -> Ok([segment])
+        Error(segment) -> Error([segment])
       }
-    [], [] -> Some([])
-    _, _ -> None
+    [], [] -> Ok([])
+    _, _ -> Error([])
   }
-  |> io.debug()
+  //   |> io.debug()
 }
 
-fn match_segment(router_segment, request_segment) -> Option(Segment) {
+fn match_segment(router_segment, request_segment) -> Result(Segment, Segment) {
   case starts_with(router_segment, "{") && ends_with(router_segment, "}") {
     True -> {
       let name =
         router_segment
         |> drop_left(1)
         |> drop_right(1)
-      Some(PathParameter(name, request_segment))
-      |> io.debug()
+      Ok(PathParameter(name, request_segment))
     }
+    //   |> io.debug()
     False ->
       case router_segment == request_segment {
-        True ->
-          Some(FixedSegment(router_segment))
-          |> io.debug()
-        False -> None
+        True -> Ok(FixedSegment(router_segment))
+        //   |> io.debug()
+        False -> Error(Mismatch(router_segment, request_segment))
       }
   }
 }
@@ -290,7 +294,7 @@ fn with_build_service(
     let response =
       response.new(404)
       |> response.set_body(bit_builder.from_string("Not found"))
-    route_handler(Trail(request, response, []))
+    route_handler(Trail(request, response, [], []))
   })
 }
 
@@ -310,6 +314,42 @@ pub fn logger(trail: Trail, next) {
 
 pub fn not_found(handler: fn(Trail) -> Response(BitBuilder)) {
   error_handler(404, handler)
+}
+
+pub fn not_found_trace(trail: Trail, next: Next) {
+  let new_response = case trail.response.status == 404 {
+    True -> {
+      let response_str =
+        trail.failed_routes
+        |> map(fn(failed_route) {
+          failed_route
+          |> fold(
+            "",
+            fn(resp, segment) {
+              case segment {
+                FixedSegment(name) -> {
+                  resp <> "/"
+                  name
+                }
+                PathParameter(name, value) -> {
+                  resp <> "/"
+                  name <> ":"
+                  value
+                }
+                Wildcard(_) -> resp <> "/*"
+                Mismatch(expected, got) ->
+                  resp <> "/" <> got <> "<-- Expected '" <> expected <> "' here"
+              }
+            },
+          )
+        })
+        |> string.join("\n")
+      trail.response
+      |> response.set_body(bit_builder.from_string(response_str))
+    }
+    _ -> trail.response
+  }
+  next(Trail(..trail, response: new_response))
 }
 
 pub fn error_handler(status: Int, handler: fn(Trail) -> Response(BitBuilder)) {

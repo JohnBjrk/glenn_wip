@@ -6,14 +6,14 @@ import gleam/http/request.{from_uri, set_body}
 import gleam/uri
 import glenn.{Trail}
 
-pub fn path_echo(trail: Trail, _next) -> Response(BitBuilder) {
+pub fn path_echo(trail: Trail(state), _next) -> Response(BitBuilder) {
   let body = bit_string.from_string(trail.request.path)
   let response_body = bit_builder.from_bit_string(body)
   Response(..trail.response, status: 200)
   |> response.set_body(response_body)
 }
 
-pub fn body_echo(trail: Trail, _next) -> Response(BitBuilder) {
+pub fn body_echo(trail: Trail(state), _next) -> Response(BitBuilder) {
   let body =
     trail.request.body
     |> from_bit_string()
@@ -21,7 +21,7 @@ pub fn body_echo(trail: Trail, _next) -> Response(BitBuilder) {
   |> response.set_body(body)
 }
 
-pub fn parameters_echo(trail: Trail, _next) -> Response(BitBuilder) {
+pub fn parameters_echo(trail: Trail(state), _next) -> Response(BitBuilder) {
   let body =
     trail.parameters
     |> join(":")
@@ -31,7 +31,7 @@ pub fn parameters_echo(trail: Trail, _next) -> Response(BitBuilder) {
   |> response.set_body(body)
 }
 
-pub fn never(trail: Trail, _next) -> Response(BitBuilder) {
+pub fn never(trail: Trail(state), _next) -> Response(BitBuilder) {
   assert 0 = 1
   let body = bit_string.from_string("never")
   let response_body = bit_builder.from_bit_string(body)
@@ -40,7 +40,7 @@ pub fn never(trail: Trail, _next) -> Response(BitBuilder) {
 }
 
 pub fn fixed_body_response(body: String) {
-  fn(trail: Trail, _next) {
+  fn(trail: Trail(state), _next) {
     let body = bit_string.from_string(body)
     let response_body = bit_builder.from_bit_string(body)
     Response(..trail.response, status: 200)

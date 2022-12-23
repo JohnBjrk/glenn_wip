@@ -5,7 +5,7 @@
 //// which can be used together with a server adapter of choice.
 
 import gleam/io
-import gleam/string.{drop_left, drop_right, ends_with, starts_with}
+import gleam/string.{drop_left, drop_right, ends_with, join, starts_with}
 import gleam/http.{
   Connect, Delete, Get, Head, Method, Options, Patch, Post, Put, Trace,
   method_to_string, scheme_to_string,
@@ -15,31 +15,34 @@ import gleam/http/request.{Request}
 import gleam/bit_builder.{BitBuilder}
 import gleam/list.{filter_map, fold, map}
 import gleam/uri
+import glogg.{Logger, anonymous_direct_logger, info, trace as tracing, warning}
 
 /// Configuration type
 pub type Configuration {
-  Configuration(match_trace: Bool)
+  ConfigurationInstance(logger: Logger)
+  Inherit
 }
 
-pub const default = Configuration(False)
+pub const default = ConfigurationInstance(anonymous_direct_logger)
 
 /// A type holding the state of a request as it is being handled by the router.
 /// This state holds the incoming request and the current response (which might 
 /// have been manipulated by any handler/middleware). Futhermore it also holds any
 /// path-parameters that was found when matching the current route as well as a
 /// list of failed routes that can be used for more granular reporting.
-pub type Trail {
+pub type Trail(state) {
   Trail(
     request: Request(BitString),
     response: Response(BitBuilder),
     parameters: List(String),
     failed_routes: List(List(Segment)),
+    state: state,
   )
 }
 
 /// The next function which should be called by a handler in order to continue processing the current [Trail](#Trail)
-pub type Next =
-  fn(Trail) -> Response(BitBuilder)
+pub type Next(state) =
+  fn(Trail(state)) -> Response(BitBuilder)
 
 /// The function signature of a handler. Handlers are attached to a router either as handlers for a specific path/method or
 /// as a middleware (see [using](#using)).
@@ -47,22 +50,27 @@ pub type Next =
 /// with the updated [trail](#Trail).
 /// Usually a handler for a path/method will want to terminate the route by returning an updated whereas a middleware will call
 /// the [next](#Next) function in order to continue processing the current [trail](#Trail). This is however not a firm rule.
-pub type Handler =
-  fn(Trail, Next) -> Response(BitBuilder)
+pub type Handler(state) =
+  fn(Trail(state), Next(state)) -> Response(BitBuilder)
 
 /// The Router type holds all routes, subroutes and middlewares when constructing a service.
-pub opaque type Router {
-  Router(base: String, routes: List(Route), configuration: Configuration)
+pub opaque type Router(state) {
+  Router(
+    base: String,
+    routes: List(Route(state)),
+    configuration: Configuration,
+    state: state,
+  )
 }
 
-type Route {
-  Route(url: String, method: Method, handler: Handler)
-  SubRoute(url: String, router: Router)
-  Middleware(handler: Handler)
+type Route(state) {
+  Route(url: String, method: Method, handler: Handler(state))
+  SubRoute(url: String, router: Router(state))
+  Middleware(handler: Handler(state))
 }
 
-type Continue =
-  fn(Router) -> Router
+type Continue(state) =
+  fn(Router(state)) -> Router(state)
 
 pub type Segment {
   PathParameter(name: String, value: String)
@@ -71,60 +79,68 @@ pub type Segment {
   Mismatch(expected: String, got: String)
 }
 
-fn chain(handler: Handler, next: fn(Trail) -> Response(BitBuilder)) -> Next {
-  fn(trail: Trail) { handler(trail, next) }
+fn chain(
+  handler: Handler(state),
+  next: fn(Trail(state)) -> Response(BitBuilder),
+) -> Next(state) {
+  fn(trail: Trail(state)) { handler(trail, next) }
 }
 
-fn end(trail: Trail) {
+fn end(trail: Trail(state)) {
   trail.response
 }
 
-pub fn get(router: Router, path: String, handler: Handler) {
+pub fn get(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Get, path, handler, router)
   router
 }
 
-pub fn post(router: Router, path: String, handler: Handler) {
+pub fn post(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Post, path, handler, router)
   router
 }
 
-pub fn put(router: Router, path: String, handler: Handler) {
+pub fn put(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Put, path, handler, router)
   router
 }
 
-pub fn patch(router: Router, path: String, handler: Handler) {
+pub fn patch(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Patch, path, handler, router)
   router
 }
 
-pub fn options(router: Router, path: String, handler: Handler) {
+pub fn options(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Options, path, handler, router)
   router
 }
 
-pub fn connect(router: Router, path: String, handler: Handler) {
+pub fn connect(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Connect, path, handler, router)
   router
 }
 
-pub fn trace(router: Router, path: String, handler: Handler) {
+pub fn trace(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Trace, path, handler, router)
   router
 }
 
-pub fn delete(router: Router, path: String, handler: Handler) {
+pub fn delete(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Delete, path, handler, router)
   router
 }
 
-pub fn head(router: Router, path: String, handler: Handler) {
+pub fn head(router: Router(state), path: String, handler: Handler(state)) {
   use router <- with_method(Head, path, handler, router)
   router
 }
 
-pub fn handler(method: Method, router: Router, path: String, handler: Handler) {
+pub fn handler(
+  method: Method,
+  router: Router(state),
+  path: String,
+  handler: Handler(state),
+) {
   use router <- with_method(method, path, handler, router)
   router
 }
@@ -132,19 +148,27 @@ pub fn handler(method: Method, router: Router, path: String, handler: Handler) {
 fn with_method(
   method: Method,
   path: String,
-  handler: Handler,
-  router: Router,
-  continue: Continue,
+  handler: Handler(state),
+  router: Router(state),
+  continue: Continue(state),
 ) {
   let get_route = Route(path, method, handler)
   continue(Router(..router, routes: [get_route, ..router.routes]))
 }
 
-fn mk_handler(path: String, method: Method, handler) {
-  io.println("Adding: " <> path)
+fn mk_handler(
+  configuration: Configuration,
+  path: String,
+  method: Method,
+  handler,
+) {
+  assert ConfigurationInstance(logger) = configuration
   let path_segments = uri.path_segments(path)
-  fn(trail: Trail, next) {
-    io.println("Trying: " <> path)
+  logger
+  |> tracing("Adding: " <> join(path_segments, "/"))
+  fn(trail: Trail(state), next) {
+    logger
+    |> info("Trying: " <> join(path_segments, "/"))
     case
       trail.request.method == method,
       match_segments(path_segments, uri.path_segments(trail.request.path))
@@ -218,100 +242,117 @@ fn match_segment(router_segment, request_segment) -> Result(Segment, Segment) {
   }
 }
 
-fn mk_middleware(path: String, handler: Handler) {
-  fn(trail: Trail, next) {
-    case string.starts_with(trail.request.path, path) {
-      True -> handler(trail, next)
-      False -> next(trail)
+fn mk_middleware(
+  configuration: Configuration,
+  path: String,
+  handler: Handler(state),
+) {
+  assert ConfigurationInstance(logger) = configuration
+  let path_segments = uri.path_segments(path)
+  fn(trail: Trail(state), next) {
+    logger
+    |> info("Trying " <> path)
+    case
+      match_segments(path_segments, uri.path_segments(trail.request.path))
+      |> io.debug()
+    {
+      Ok(_) -> handler(trail, next)
+      _ -> next(trail)
     }
   }
 }
 
-pub fn route(router: Router, path: String, sub_router: Router) {
+pub fn route(router: Router(state), path: String, sub_router: Router(state)) {
   use router <- with_route(path, sub_router, router)
   router
 }
 
 fn with_route(
   path: String,
-  sub_router: Router,
-  router: Router,
-  continue: Continue,
+  sub_router: Router(state),
+  router: Router(state),
+  continue: Continue(state),
 ) {
   let sub_route = SubRoute(path, sub_router)
   continue(Router(..router, routes: [sub_route, ..router.routes]))
 }
 
-pub fn using(router: Router, handler: Handler) {
+pub fn using(router: Router(state), handler: Handler(state)) {
   use router <- with_using(handler, router)
   router
 }
 
-fn with_using(handler: Handler, router: Router, continue: Continue) {
+fn with_using(
+  handler: Handler(state),
+  router: Router(state),
+  continue: Continue(state),
+) {
   let middleware = Middleware(handler)
   continue(Router(..router, routes: [middleware, ..router.routes]))
 }
 
-pub fn router(configuration: Configuration) -> Router {
-  start_router_base(configuration)
+pub fn router(configuration: Configuration) -> Router(Nil) {
+  Router("", [], configuration, Nil)
 }
 
-pub fn start_router_config(configuration: Configuration) -> Router {
-  router(configuration)
-}
-
-pub fn start_router_base(configuration: Configuration) -> Router {
-  use router <- with_start_router("", configuration)
-  router
-}
-
-fn with_start_router(
-  base: String,
+pub fn router_with_state(
   configuration: Configuration,
-  continue: Continue,
-) {
-  continue(Router(base, [], configuration))
+  state: state,
+) -> Router(state) {
+  Router("", [], configuration, state)
 }
 
-fn build_route_handler(next: Next, context: String, routes: List(Route)) {
+fn build_route_handler(
+  next: Next(state),
+  configuration: Configuration,
+  context: String,
+  routes: List(Route(state)),
+) {
   routes
   |> list.fold(
     next,
     fn(next, route) {
       case route {
         Route(path, method, handler) ->
-          mk_handler("/" <> context <> "/" <> path, method, handler)
+          mk_handler(
+            configuration,
+            "/" <> context <> "/" <> path,
+            method,
+            handler,
+          )
           |> chain(next)
-        SubRoute(path, router) ->
+        SubRoute(path, router) -> {
+          let sub_configuration = case router.configuration {
+            ConfigurationInstance(_) -> router.configuration
+            Inherit -> configuration
+          }
           build_route_handler(
             next,
+            sub_configuration,
             "/" <> context <> "/" <> path,
             router.routes,
           )
+        }
         Middleware(handler) ->
-          mk_middleware(context, handler)
+          mk_middleware(configuration, context <> "/*", handler)
           |> chain(next)
       }
     },
   )
 }
 
-pub fn build_service(router: Router) {
-  use service <- with_build_service(router)
-  service
-}
-
-fn with_build_service(
-  router: Router,
-  continue,
-) -> fn(Request(BitString)) -> Response(BitBuilder) {
-  let route_handler = build_route_handler(end, router.base, router.routes)
-  continue(fn(request: Request(BitString)) {
+pub fn build_service(router: Router(state)) {
+  assert ConfigurationInstance(logger) = router.configuration
+  logger
+  |> info("Building Service")
+  let route_handler =
+    build_route_handler(end, router.configuration, router.base, router.routes)
+  fn(request: Request(BitString)) {
     let response =
       response.new(404)
       |> response.set_body(bit_builder.from_string("Not found"))
-    route_handler(Trail(request, response, [], []))
-  })
+    route_handler(Trail(request, response, [], [], router.state))
+  }
 }
 
 pub fn with_server(server, service, continue) {
@@ -319,7 +360,7 @@ pub fn with_server(server, service, continue) {
   continue()
 }
 
-pub fn logger(trail: Trail, next) {
+pub fn logger(trail: Trail(state), next) {
   io.println(
     string.uppercase(method_to_string(trail.request.method)) <> ": " <> scheme_to_string(
       trail.request.scheme,
@@ -328,11 +369,11 @@ pub fn logger(trail: Trail, next) {
   next(trail)
 }
 
-pub fn not_found(handler: fn(Trail) -> Response(BitBuilder)) {
+pub fn not_found(handler: fn(Trail(state)) -> Response(BitBuilder)) {
   error_handler(404, handler)
 }
 
-pub fn not_found_trace(trail: Trail, next: Next) {
+pub fn not_found_trace(trail: Trail(state), next: Next(state)) {
   let new_response = case trail.response.status == 404 {
     True -> {
       let response_str =
@@ -368,8 +409,11 @@ pub fn not_found_trace(trail: Trail, next: Next) {
   next(Trail(..trail, response: new_response))
 }
 
-pub fn error_handler(status: Int, handler: fn(Trail) -> Response(BitBuilder)) {
-  fn(trail: Trail, next) {
+pub fn error_handler(
+  status: Int,
+  handler: fn(Trail(state)) -> Response(BitBuilder),
+) {
+  fn(trail: Trail(state), next) {
     let new_response = case trail.response.status == status {
       True -> handler(trail)
       _ -> trail.response

@@ -59,7 +59,7 @@ pub opaque type Router(state) {
     base: String,
     routes: List(Route(state)),
     configuration: Configuration,
-    state: state,
+    initial_state: state,
   )
 }
 
@@ -351,7 +351,7 @@ pub fn build_service(router: Router(state)) {
     let response =
       response.new(404)
       |> response.set_body(bit_builder.from_string("Not found"))
-    route_handler(Trail(request, response, [], [], router.state))
+    route_handler(Trail(request, response, [], [], router.initial_state))
   }
 }
 

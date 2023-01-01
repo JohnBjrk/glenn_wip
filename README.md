@@ -1,7 +1,7 @@
-# web_gleam
+# glenn
 
-[![Package Version](https://img.shields.io/hexpm/v/web_gleam)](https://hex.pm/packages/web_gleam)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/web_gleam/)
+[![Package Version](https://img.shields.io/hexpm/v/glenn)](https://hex.pm/packages/glenn)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/glenn/)
 
 A Gleam project
 
@@ -18,7 +18,7 @@ gleam shell # Run an Erlang shell
 If available on Hex this package can be added to your Gleam project:
 
 ```sh
-gleam add web_gleam
+gleam add glenn
 ```
 
-and its documentation can be found at <https://hexdocs.pm/web_gleam>.
+and its documentation can be found at <https://hexdocs.pm/glenn>.

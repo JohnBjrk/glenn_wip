@@ -6,8 +6,8 @@ import gleam/http/request
 import gleam/http/response.{Response}
 import gleam/http.{Patch}
 import glenn.{
-  Trail, build_service, default, get, logger, not_found, not_found_trace, patch,
-  route, router, router_with_state, using,
+  Trail, add_request_logger, build_service, default, get, not_found,
+  not_found_trace, patch, route, router, router_with_state, using,
 }
 import glenn_testing.{
   fixed_body_response, get_body, mk_request, never, parameters_echo, path_echo,
@@ -141,4 +141,33 @@ pub fn state_test() {
   response
   |> get_body()
   |> should.equal("gleam")
+}
+
+pub fn initial_state_test() {
+  let state_appender = fn(trail: Trail(List(String)), next) -> Response(
+    BitBuilder,
+  ) {
+    let new_trail = Trail(..trail, state: ["gleam", ..trail.state])
+    next(new_trail)
+  }
+
+  let state_echo = fn(trail: Trail(List(String)), _next) -> Response(BitBuilder) {
+    let body =
+      trail.state
+      |> join("/")
+      |> from_string()
+    Response(..trail.response, status: 200)
+    |> response.set_body(body)
+  }
+  let sut =
+    router_with_state(default, ["thriving"])
+    |> using(state_appender)
+    |> get("state/of", state_echo)
+    |> build_service()
+
+  let response = sut(mk_request("https://base.test/state/of", ""))
+
+  response
+  |> get_body()
+  |> should.equal("gleam/thriving")
 }
